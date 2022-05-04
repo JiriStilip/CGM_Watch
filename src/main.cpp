@@ -22,7 +22,7 @@
 
 struct CGMeasurement {
   int32_t timeOffset;
-  float glucoseValue;
+  int32_t glucoseValue;
 };
 
 enum State {PAIR_0, PAIR_1, AUTH_0, AUTH_1, INVALID_SEC = 8, ERR = -1};
@@ -33,7 +33,7 @@ int32_t ypos = 42;
 char *messageLine;
 State currentState;
 
-CircularBuffer<CGMeasurement*, 10> sensorBuffer;
+CircularBuffer<CGMeasurement, 10> sensorBuffer;
 
 BLEScan *pBLEScan;
 BLEAddress *pServerAddress;
@@ -64,13 +64,12 @@ void drawMessage(char *message) {
 }
 
 void drawMainScreen(int timeOffset, char *message) {
-  int8_t hh, mm, ss;
+  int8_t hh, mm;
   char timeStr[9];
 
-  hh = timeOffset / 3600;
-  mm = (timeOffset % 3600) / 60;
-  ss = (timeOffset % 3600) % 60;
-  sprintf(timeStr, "%02d:%02d:%02d", hh, mm, ss);
+  hh = (timeOffset % 86400) / 3600;
+  mm = ((timeOffset % 86400) % 3600) / 60;
+  sprintf(timeStr, "%02d:%02d", hh, mm);
   ttgo->tft->setTextSize(3);
   ttgo->tft->drawCentreString(timeStr, (TFT_WIDTH / 2), 8, 1);
   ttgo->tft->drawFastHLine(0, 40, TFT_WIDTH, TFT_WHITE);
@@ -96,14 +95,11 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
 void glucoseNotifyCallback(BLERemoteCharacteristic* pBLERemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
   char *received = (char*)pData;
   int32_t time;
-  float val;
-  CGMeasurement *measurement = new CGMeasurement();
+  int32_t val;
 
-  sscanf(received, "%04d|%6f", &time, &val);
-  measurement->timeOffset = time;
-  measurement->glucoseValue = val;
+  sscanf(received, "%10d|%4d", &time, &val);
 
-  sensorBuffer.push(measurement);
+  sensorBuffer.push(CGMeasurement{time, val});
 
   Serial.print("Received: ");
   Serial.print(time);
@@ -204,7 +200,7 @@ void loop() {
 
   //Serial.println(currentState);
 
-  char answer[17];
+  char answer[16];
 
   switch(currentState) {
     case INVALID_SEC: 
@@ -213,20 +209,18 @@ void loop() {
 
         std::string initial = cgmMeasurementRemoteCharacteristic->readValue();
         int32_t time;
-        float val;
+        int32_t val;
 
-        sscanf(initial.c_str(), "%04d|%6f", &time, &val);
-        CGMeasurement *measurement = new CGMeasurement();
-        measurement->timeOffset = time;
-        measurement->glucoseValue = val;
-        sensorBuffer.push(measurement);
+        sscanf(initial.c_str(), "%10d|%4d", &time, &val);
+
+        sensorBuffer.push(CGMeasurement{time, val});
 
         Serial.print("Read: ");
         Serial.print(time);
         Serial.print(" | ");
         Serial.println(val);
 
-        sprintf(answer, "%04d", sensorBuffer.last()->timeOffset);
+        sprintf(answer, "%10d", sensorBuffer.last().timeOffset);
         cgmTimeRemoteCharacteristic->writeValue(answer);
 
         readInitial = false; 
@@ -234,18 +228,18 @@ void loop() {
       if (newValue) {
         messageLine = "NOTIFY";
 
-        currentTime = sensorBuffer.last()->timeOffset;
+        currentTime = sensorBuffer.last().timeOffset;
 
         ttgo->tft->fillRect(41, 41, 158, 180, TFT_BLACK);
         ypos = 42;
-        char measurement[13];
+        char measurement[16];
         for (int i = 0; i < sensorBuffer.size(); ++i) {
-          sprintf(measurement, "%02d:%02d|%6.2f", ((sensorBuffer[i]->timeOffset % 3600) / 60), ((sensorBuffer[i]->timeOffset % 3600) % 60), sensorBuffer[i]->glucoseValue);
+          sprintf(measurement, "%02d:%02d | %.2f", ((sensorBuffer[i].timeOffset % 86400) / 3600), (((sensorBuffer[i].timeOffset % 86400) % 3600) / 60), (sensorBuffer[i].glucoseValue / 100.0));
           ttgo->tft->drawCentreString(measurement, (TFT_WIDTH / 2), ypos, 1);
           ypos += 18;
         }
 
-        sprintf(answer, "%04d", sensorBuffer.last()->timeOffset);
+        sprintf(answer, "%10d", sensorBuffer.last().timeOffset);
         cgmTimeRemoteCharacteristic->writeValue(answer);
 
         newValue = false;
@@ -288,7 +282,6 @@ void loop() {
   }
 
   drawMainScreen(currentTime, messageLine);
-    
-  currentTime++;
+
   delay(1000);
 }
