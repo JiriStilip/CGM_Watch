@@ -4,6 +4,9 @@
 #include <BLEDevice.h>
 #include <EEPROM.h>
 
+#include "aes.h"
+#include "rng.h"
+
 #define SENSOR_BLE_NAME "CGM Sensor"
 #define WATCH_BLE_NAME "CGM Watch"
 
@@ -181,7 +184,7 @@ void setup() {
   delay(1500);
 
   EEPROM.begin(EEPROM_SIZE);
-  private_key = 3;
+  private_key = random_from_to(1, 100);
   client_public_key = ((int)pow(DH_COMMON_G, private_key)) % DH_COMMON_P;
   shared_key = EEPROM.readUInt(0);
   for (int i = 0; i < 4; ++i) {
