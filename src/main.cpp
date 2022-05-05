@@ -25,13 +25,13 @@ struct CGMeasurement {
   int32_t glucoseValue;
 };
 
-enum State {PAIR_0, PAIR_1, AUTH_0, AUTH_1, INVALID_SEC = 8, ERR = -1};
+enum SecurityState {PAIR_0, PAIR_1, AUTH_0, AUTH_1, READY};
 
 TTGOClass *ttgo;
 int32_t currentTime = 0;
 int32_t ypos = 42;
 char *messageLine;
-State currentState;
+SecurityState currentState;
 
 CircularBuffer<CGMeasurement, 10> sensorBuffer;
 
@@ -48,6 +48,8 @@ BLERemoteCharacteristic *securityActionRemoteCharacteristic;
 bool connected = false;
 bool newValue = false;
 bool readInitial = true;
+
+char answer[64];
 
 uint32_t private_key;
 uint32_t server_public_key;
@@ -143,6 +145,7 @@ bool connectToServer(BLEAddress pAddress) {
   return true;
 }
 
+
 void setup() {
   Serial.begin(115200);
 
@@ -189,21 +192,45 @@ void setup() {
 void loop() {
   if (connected == false) while(1);
 
-  std::string actionStr, charStr;
-  int securityAction;
-  actionStr = securityActionRemoteCharacteristic->readValue();
-  sscanf(actionStr.c_str(), "%d", &securityAction);
-  if (securityAction == 0) currentState = PAIR_0;
-  else if (securityAction == 2) currentState = AUTH_0;
-  else if (securityAction == 8) currentState = INVALID_SEC;
-  else currentState = ERR;
+  currentState = static_cast<SecurityState>(atoi(securityActionRemoteCharacteristic->readValue().c_str()));
 
-  //Serial.println(currentState);
+  switch (currentState) {
+    case PAIR_0: 
+      messageLine = "PAIR";
 
-  char answer[16];
+      server_public_key = atoi(securityValueRemoteCharacteristic->readValue().c_str());
+      shared_key = ((int)pow(server_public_key, private_key)) % DH_COMMON_P;
+      for (int i = 0; i < 4; ++i) {
+        aes_key[i] = shared_key;
+      }
+      EEPROM.writeUInt(0, shared_key);
+      EEPROM.commit();
 
-  switch(currentState) {
-    case INVALID_SEC: 
+      sprintf(answer, "%d", client_public_key);
+      securityValueRemoteCharacteristic->writeValue(answer);
+      sprintf(answer, "%d", PAIR_1);
+      securityActionRemoteCharacteristic->writeValue(answer);
+      break;
+    
+    case PAIR_1: 
+      break;
+
+    case AUTH_0: 
+      messageLine = "AUTH";
+
+      checkNum = atoi(securityValueRemoteCharacteristic->readValue().c_str());
+      checkNum += shared_key;
+
+      sprintf(answer, "%d", checkNum);
+      securityValueRemoteCharacteristic->writeValue(answer);
+      sprintf(answer, "%d", AUTH_1);
+      securityActionRemoteCharacteristic->writeValue(answer);
+      break;
+
+    case AUTH_1: 
+      break;
+
+    case READY: 
       if (readInitial) {
         messageLine = "READ";
 
@@ -234,7 +261,7 @@ void loop() {
         ypos = 42;
         char measurement[16];
         for (int i = 0; i < sensorBuffer.size(); ++i) {
-          sprintf(measurement, "%02d:%02d | %.2f", ((sensorBuffer[i].timeOffset % 86400) / 3600), (((sensorBuffer[i].timeOffset % 86400) % 3600) / 60), (sensorBuffer[i].glucoseValue / 100.0));
+          sprintf(measurement, "%02d:%02d|%.2f", ((sensorBuffer[i].timeOffset % 86400) / 3600), (((sensorBuffer[i].timeOffset % 86400) % 3600) / 60), (sensorBuffer[i].glucoseValue / 100.0));
           ttgo->tft->drawCentreString(measurement, (TFT_WIDTH / 2), ypos, 1);
           ypos += 18;
         }
@@ -244,40 +271,6 @@ void loop() {
 
         newValue = false;
       }
-      break;
-    
-    case PAIR_0: 
-      messageLine = "PAIR";
-
-      charStr = securityValueRemoteCharacteristic->readValue();
-      sscanf(charStr.c_str(), "%d", &server_public_key);
-      shared_key = ((int)pow(server_public_key, private_key)) % DH_COMMON_P;
-      for (int i = 0; i < 4; ++i) {
-        aes_key[i] = shared_key;
-      }
-      EEPROM.writeUInt(0, shared_key);
-      EEPROM.commit();
-
-      sprintf(answer, "%d", client_public_key);
-      securityValueRemoteCharacteristic->writeValue(answer);
-      sprintf(answer, "%d", PAIR_1);
-      securityActionRemoteCharacteristic->writeValue(answer);
-      break;
-
-    case AUTH_0: 
-      messageLine = "AUTH";
-
-      charStr = securityValueRemoteCharacteristic->readValue();
-      sscanf(charStr.c_str(), "%d", &checkNum);
-      checkNum += shared_key;
-
-      sprintf(answer, "%d", checkNum);
-      securityValueRemoteCharacteristic->writeValue(answer);
-      sprintf(answer, "%d", AUTH_1);
-      securityActionRemoteCharacteristic->writeValue(answer);
-      break;
-
-    default: 
       break;
   }
 
